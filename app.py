@@ -554,8 +554,13 @@ def main():
     # ── Tab 3: Horizontal Slice ──
     with tab3:
         st.subheader("Irisan Horizontal")
-        depth_idx = st.slider("Pilih Kedalaman", 0, len(zi)-1, len(zi)//2,
-                              format_func=lambda i: f"{zi[i]:.2f} m")
+        depth_labels = [f"{z:.2f} m" for z in zi]
+        depth_label_sel = st.select_slider(
+            "Pilih Kedalaman",
+            options=depth_labels,
+            value=depth_labels[len(depth_labels) // 2],
+        )
+        depth_idx = depth_labels.index(depth_label_sel)
         fig_hz = plot_horizontal_slice(xi, yi, zi, grid, depth_idx, zi[depth_idx], vmin, vmax)
         st.plotly_chart(fig_hz, use_container_width=True)
 
@@ -574,8 +579,13 @@ def main():
     # ── Tab 4: Vertical Slice ──
     with tab4:
         st.subheader("Irisan Vertikal per Lintasan")
-        line_idx = st.slider("Pilih Lintasan (Y)", 0, len(yi)-1, len(yi)//2,
-                             format_func=lambda i: f"Y = {yi[i]:.1f} m")
+        line_labels = [f"Y = {y:.1f} m" for y in yi]
+        line_label_sel = st.select_slider(
+            "Pilih Lintasan (Y)",
+            options=line_labels,
+            value=line_labels[len(line_labels) // 2],
+        )
+        line_idx = line_labels.index(line_label_sel)
         fig_vt = plot_vertical_slice(xi, zi, grid, line_idx, yi[line_idx], vmin, vmax)
         st.plotly_chart(fig_vt, use_container_width=True)
 
