@@ -2,478 +2,650 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from scipy.interpolate import griddata
 import io
 
+# ─────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────
 st.set_page_config(
     page_title="Model 3D Resistivitas Geolistrik",
     page_icon="🌍",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("🌍 Model 3D Resistivitas Geolistrik")
-st.markdown("**Visualisasi 3D Sebaran Gambut — Skala Warna Identik dengan Res2DInv**")
+# ─────────────────────────────────────────────
+# TELFORD RESISTIVITY TABLE (Ω·m)
+# Sumber: Telford et al., 1990 – Applied Geophysics
+# ─────────────────────────────────────────────
+TELFORD_TABLE = {
+    # (min, max, nama_litologi, deskripsi)
+    "Udara / Dry Gas":              (1e6,  1e12, "Udara / Dry Gas",              "Non-konduktif"),
+    "Granit":                       (200,  1e5,  "Granit",                       "Batuan beku asam"),
+    "Andesit / Basalt":             (10,   1e5,  "Andesit / Basalt",             "Batuan beku mafik"),
+    "Riolit":                       (500,  1e5,  "Riolit",                       "Batuan beku vulkanik asam"),
+    "Tuf Vulkanik":                 (20,   2000, "Tuf Vulkanik",                 "Endapan piroklastik"),
+    "Batu Gamping (Limestone)":     (500,  1e7,  "Batu Gamping",                 "Batuan karbonat"),
+    "Batu Gamping Terkarstifikasi": (100,  1e5,  "Batu Gamping Terkarstifikasi", "Karbonat dengan rongga"),
+    "Dolomit":                      (100,  1e4,  "Dolomit",                      "Batuan karbonat Mg"),
+    "Batupasir (Sandstone)":        (1,    1e4,  "Batupasir",                    "Batuan sedimen klastik kasar"),
+    "Batupasir Jenuh Air":          (1,    100,  "Batupasir Jenuh Air",          "Batupasir tersaturasi"),
+    "Batulempung (Claystone)":      (1,    100,  "Batulempung",                  "Batuan sedimen klastik halus"),
+    "Serpih (Shale)":               (5,    500,  "Serpih (Shale)",               "Batuan sedimen terkonsolidasi"),
+    "Lempung (Clay)":               (1,    100,  "Lempung",                      "Tanah berbutir halus plastis"),
+    "Lanau (Silt)":                 (10,   200,  "Lanau",                        "Tanah berbutir halus"),
+    "Pasir Kering (Dry Sand)":      (100,  1e5,  "Pasir Kering",                 "Sedimen tidak jenuh"),
+    "Pasir Basah (Wet Sand)":       (10,   500,  "Pasir Basah",                  "Sedimen tersaturasi"),
+    "Kerikil / Gravel":             (100,  600,  "Kerikil / Gravel",             "Sedimen kasar"),
+    "Gambut (Peat)":                (5,    100,  "Gambut",                       "Endapan organik lahan basah"),
+    "Tanah Humus":                  (10,   150,  "Tanah Humus",                  "Lapisan tanah atas organik"),
+    "Air Tawar (Freshwater)":       (10,   100,  "Air Tawar",                    "Akuifer air tawar"),
+    "Air Asin (Saltwater)":         (0.01, 1,    "Air Asin",                     "Akuifer air payau/asin"),
+    "Lempung Jenuh Garam":          (0.01, 1,    "Lempung Jenuh Garam",          "Sedimen salin"),
+    "Alluvium (Campuran)":          (10,   800,  "Alluvium",                     "Endapan sungai campuran"),
+    "Batubara (Coal)":              (200,  1e4,  "Batubara",                     "Batuan sedimen organik"),
+    "Kuarsit":                      (500,  5e4,  "Kuarsit",                      "Batuan metamorf"),
+    "Filit / Slate":                (10,   2000, "Filit / Slate",                "Batuan metamorf derajat rendah"),
+    "Sekis (Schist)":               (20,   1e4,  "Sekis",                        "Batuan metamorf"),
+    "Gneiss":                       (100,  1e5,  "Gneiss",                       "Batuan metamorf derajat tinggi"),
+    "Marmer":                       (100,  2.5e8,"Marmer",                       "Batuan metamorf karbonat"),
+    "Lempung Terkonsolidasi":       (20,   200,  "Lempung Terkonsolidasi",       "Lempung padat / overconsolidated"),
+}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# COLORSCALE IDENTIK DENGAN RES2DINV
-# Tick legend 2D: 1, 7, 13, 19, 25, 31, 37, 43 Ω·m
-# Range data   : 0.49 – 60.94 Ω·m
-# Warna urutan : biru tua → biru → biru muda → cyan → hijau tua → hijau muda
-#                → kuning-hijau → kuning → oranye → merah → merah tua → ungu
-# ─────────────────────────────────────────────────────────────────────────────
-R_MIN_DATA = 0.49
-R_MAX_DATA = 60.94
+# ─────────────────────────────────────────────
+# GEOLOGICAL ENVIRONMENT DEFINITIONS
+# Setiap lingkungan geologi mendefinisikan subset litologi yang mungkin ada
+# ─────────────────────────────────────────────
+GEOLOGICAL_ENVIRONMENTS = {
+    "Alluvium (Endapan Sungai)": {
+        "description": "Endapan sungai muda terdiri dari campuran lempung, lanau, pasir, dan kerikil.",
+        "lithologies": [
+            "Lempung (Clay)", "Lanau (Silt)", "Pasir Basah (Wet Sand)", "Pasir Kering (Dry Sand)",
+            "Kerikil / Gravel", "Alluvium (Campuran)", "Air Tawar (Freshwater)", "Gambut (Peat)", "Tanah Humus",
+        ],
+    },
+    "Dataran Pantai / Pesisir": {
+        "description": "Endapan pesisir, delta, atau rawa pasang surut.",
+        "lithologies": [
+            "Lempung (Clay)", "Lanau (Silt)", "Pasir Basah (Wet Sand)", "Gambut (Peat)",
+            "Air Asin (Saltwater)", "Lempung Jenuh Garam", "Alluvium (Campuran)", "Tanah Humus",
+        ],
+    },
+    "Lahan Gambut / Rawa": {
+        "description": "Lingkungan lahan basah, dominan endapan organik dan lempung jenuh air.",
+        "lithologies": [
+            "Gambut (Peat)", "Lempung (Clay)", "Lanau (Silt)", "Air Tawar (Freshwater)",
+            "Tanah Humus", "Alluvium (Campuran)",
+        ],
+    },
+    "Formasi Sedimen Tersier": {
+        "description": "Batuan sedimen Tersier: batupasir, serpih, batulempung, dan batugamping.",
+        "lithologies": [
+            "Batupasir (Sandstone)", "Batupasir Jenuh Air", "Serpih (Shale)",
+            "Batulempung (Claystone)", "Batu Gamping (Limestone)", "Lempung (Clay)",
+            "Lempung Terkonsolidasi", "Batubara (Coal)",
+        ],
+    },
+    "Formasi Volkanik": {
+        "description": "Produk vulkanisme: lava, tuf, dan endapan lahar.",
+        "lithologies": [
+            "Andesit / Basalt", "Riolit", "Tuf Vulkanik", "Granit",
+            "Lempung (Clay)", "Tanah Humus", "Batupasir (Sandstone)",
+        ],
+    },
+    "Batuan Karbonat / Karst": {
+        "description": "Dominasi batugamping dan dolomit, dapat terkarstifikasi.",
+        "lithologies": [
+            "Batu Gamping (Limestone)", "Batu Gamping Terkarstifikasi", "Dolomit",
+            "Air Tawar (Freshwater)", "Lempung (Clay)", "Batupasir (Sandstone)",
+        ],
+    },
+    "Batuan Beku Intrusif": {
+        "description": "Lingkungan dengan dominasi batuan beku: granit, diorit, dll.",
+        "lithologies": [
+            "Granit", "Andesit / Basalt", "Kuarsit",
+            "Lempung (Clay)", "Tanah Humus", "Batupasir (Sandstone)",
+        ],
+    },
+    "Batuan Metamorf": {
+        "description": "Lingkungan geologi dengan batuan metamorf: sekis, gneiss, filit.",
+        "lithologies": [
+            "Sekis (Schist)", "Gneiss", "Filit / Slate", "Kuarsit", "Marmer",
+            "Lempung (Clay)", "Tanah Humus",
+        ],
+    },
+    "Endapan Danau (Lakustrin)": {
+        "description": "Endapan di lingkungan danau: lempung, lanau, dan gambut.",
+        "lithologies": [
+            "Lempung (Clay)", "Lanau (Silt)", "Gambut (Peat)", "Air Tawar (Freshwater)",
+            "Tanah Humus", "Batulempung (Claystone)", "Alluvium (Campuran)",
+        ],
+    },
+    "Universal (Semua Litologi)": {
+        "description": "Gunakan semua litologi dari tabel Telford tanpa filter geologi regional.",
+        "lithologies": list(TELFORD_TABLE.keys()),
+    },
+}
 
-def norm(r):
-    """Normalisasi nilai resistivitas ke 0-1 untuk colorscale."""
-    return (r - R_MIN_DATA) / (R_MAX_DATA - R_MIN_DATA)
+# ─────────────────────────────────────────────
+# HELPER: classify resistivity against active lithology set
+# ─────────────────────────────────────────────
+def classify_resistivity(rho, active_lithologies):
+    """
+    Mencocokkan nilai resistivitas terhadap rentang Telford
+    untuk litologi yang aktif (sesuai lingkungan geologi regional).
+    Mengembalikan daftar litologi yang cocok, diurutkan berdasarkan
+    seberapa 'tengah' nilai rho berada dalam rentang tersebut.
+    """
+    matches = []
+    for name in active_lithologies:
+        if name not in TELFORD_TABLE:
+            continue
+        rmin, rmax, label, desc = TELFORD_TABLE[name]
+        if rmin <= rho <= rmax:
+            # skor: seberapa dekat ke pusat rentang (log-scale)
+            center = (np.log10(rmin) + np.log10(rmax)) / 2
+            score = abs(np.log10(rho) - center)
+            matches.append((score, label, desc, rmin, rmax))
+    if not matches:
+        # fallback: cari yang paling dekat
+        best = None
+        best_dist = 1e18
+        for name in active_lithologies:
+            if name not in TELFORD_TABLE:
+                continue
+            rmin, rmax, label, desc = TELFORD_TABLE[name]
+            dist = min(abs(rho - rmin), abs(rho - rmax))
+            if dist < best_dist:
+                best_dist = dist
+                best = (label, desc, rmin, rmax)
+        if best:
+            return [{"lithology": best[0], "description": best[1],
+                     "range": f"{best[2]}–{best[3]} Ω·m", "confidence": "Estimasi terdekat"}]
+        return [{"lithology": "Tidak teridentifikasi", "description": "-",
+                 "range": "-", "confidence": "-"}]
+    matches.sort(key=lambda x: x[0])
+    results = []
+    for i, (score, label, desc, rmin, rmax) in enumerate(matches[:3]):
+        confidence = "Tinggi" if i == 0 else ("Sedang" if i == 1 else "Rendah")
+        results.append({"lithology": label, "description": desc,
+                         "range": f"{rmin}–{rmax} Ω·m", "confidence": confidence})
+    return results
 
-# Colorscale disesuaikan dengan posisi tick Res2DInv
-COLORSCALE_RES2DINV = [
-    [0.000,               '#00004B'],  # < 0.49 Ω·m — biru sangat tua
-    [norm(1.0),           '#0000FF'],  # 1 Ω·m — biru
-    [norm(7.0),           '#0080FF'],  # 7 Ω·m — biru muda
-    [norm(13.0),          '#00FFFF'],  # 13 Ω·m — cyan
-    [norm(19.0),          '#00C800'],  # 19 Ω·m — hijau tua
-    [norm(25.0),          '#80FF00'],  # 25 Ω·m — hijau muda
-    [norm(31.0),          '#FFFF00'],  # 31 Ω·m — kuning
-    [norm(37.0),          '#FFA000'],  # 37 Ω·m — oranye
-    [norm(43.0),          '#FF0000'],  # 43 Ω·m — merah
-    [norm(52.0),          '#800000'],  # ~52 Ω·m — merah tua
-    [1.000,               '#500050'],  # 60.94 Ω·m — ungu tua
-]
 
-# Tick untuk colorbar (nilai asli Ω·m)
-CBAR_TICKVALS = [norm(v) for v in [1, 7, 13, 19, 25, 31, 37, 43]]
-CBAR_TICKTEXT = ['1.0', '7.0', '13.0', '19.0', '25.0', '31.0', '37.0', '43.0']
+def get_primary_lithology(rho, active_lithologies):
+    results = classify_resistivity(rho, active_lithologies)
+    return results[0]["lithology"] if results else "Tidak teridentifikasi"
 
-CBAR_CFG = dict(
-    title=dict(text="Resistivity (Ω·m)", side='right', font=dict(size=13)),
-    thickness=20, len=0.75,
-    tickvals=CBAR_TICKVALS,
-    ticktext=CBAR_TICKTEXT,
-    tickfont=dict(size=11),
-    outlinewidth=1,
-)
 
-# ─── Load & Grid Builder ──────────────────────────────────────────────────────
+def build_color_scale_for_env(active_lithologies, vmin, vmax):
+    """
+    Buat colorscale Plotly berdasarkan rentang data aktual.
+    """
+    # Gunakan colorscale standar yang informatif untuk resistivitas
+    return "RdYlGn_r"  # merah=resistivitas rendah (konduktif), hijau=tinggi (resistif)
+
+
+# ─────────────────────────────────────────────
+# LOAD DATA
+# ─────────────────────────────────────────────
 @st.cache_data
-def load_and_build(file_bytes, nx, ny, nz):
-    df   = pd.read_excel(io.BytesIO(file_bytes), sheet_name='DATA')
-    geom = pd.read_excel(io.BytesIO(file_bytes), sheet_name='GEOMETRY')
-    line_y = dict(zip(geom['Line'], geom['Y_Position']))
-    df['Y'] = df['Line'].map(line_y)
+def load_data(uploaded_file):
+    xl = pd.ExcelFile(uploaded_file)
+    df_geo = xl.parse("GEOMETRY")
+    df_data = xl.parse("DATA")
+    df_geo.columns = [c.strip().upper() for c in df_geo.columns]
+    df_data.columns = [c.strip().upper() for c in df_data.columns]
+    # normalise column names
+    col_map_data = {}
+    for c in df_data.columns:
+        cu = c.upper()
+        if "LINE" in cu:          col_map_data[c] = "LINE"
+        elif "DIST" in cu:        col_map_data[c] = "DISTANCE"
+        elif "POS" in cu:         col_map_data[c] = "POSITION"
+        elif "DEPTH" in cu:       col_map_data[c] = "DEPTH"
+        elif "RESIST" in cu:      col_map_data[c] = "RESISTIVITY"
+    df_data = df_data.rename(columns=col_map_data)
+    col_map_geo = {}
+    for c in df_geo.columns:
+        cu = c.upper()
+        if "LINE" in cu:     col_map_geo[c] = "LINE"
+        elif "Y" in cu or "POS" in cu: col_map_geo[c] = "Y_POSITION"
+    df_geo = df_geo.rename(columns=col_map_geo)
+    # merge Y positions
+    line_y = dict(zip(df_geo["LINE"].astype(str), df_geo["Y_POSITION"]))
+    df_data["LINE"] = df_data["LINE"].astype(str)
+    df_data["Y"] = df_data["LINE"].map(line_y)
+    df_data["X"] = pd.to_numeric(df_data.get("DISTANCE", df_data.get("POSITION", 0)), errors="coerce")
+    df_data["Z"] = pd.to_numeric(df_data["DEPTH"], errors="coerce")
+    df_data["RHO"] = pd.to_numeric(df_data["RESISTIVITY"], errors="coerce")
+    df_data = df_data.dropna(subset=["X", "Y", "Z", "RHO"])
+    df_data = df_data[df_data["RHO"] > 0]
+    return df_data, line_y
 
-    xi = np.linspace(df['Distance'].min(), df['Distance'].max(), nx)
-    yi = np.linspace(df['Y'].min(),        df['Y'].max(),        ny)
-    zi = np.linspace(df['Depth'].min(),    df['Depth'].max(),    nz)
 
-    pts  = df[['Distance','Y','Depth']].values
-    vals = df['Resistivity'].values
+# ─────────────────────────────────────────────
+# BUILD 3D GRID
+# ─────────────────────────────────────────────
+def build_grid(df, nx=60, ny=60, nz=30):
+    xi = np.linspace(df["X"].min(), df["X"].max(), nx)
+    yi = np.linspace(df["Y"].min(), df["Y"].max(), ny)
+    zi = np.linspace(df["Z"].min(), df["Z"].max(), nz)
+    XX, YY, ZZ = np.meshgrid(xi, yi, zi, indexing="ij")
+    pts = df[["X", "Y", "Z"]].values
+    vals = df["RHO"].values
+    grid = griddata(pts, vals, (XX, YY, ZZ), method="linear")
+    # fill NaN with nearest
+    nan_mask = np.isnan(grid)
+    if nan_mask.any():
+        grid_nn = griddata(pts, vals, (XX, YY, ZZ), method="nearest")
+        grid[nan_mask] = grid_nn[nan_mask]
+    return xi, yi, zi, grid
 
-    XX, YY, ZZ = np.meshgrid(xi, yi, zi, indexing='ij')
-    flat = np.column_stack([XX.flatten(), YY.flatten(), ZZ.flatten()])
 
-    r_lin  = griddata(pts, vals, flat, method='linear')
-    r_near = griddata(pts, vals, flat, method='nearest')
-    grid   = np.where(np.isnan(r_lin), r_near, r_lin).reshape(nx, ny, nz)
-
-    # Normalisasi ke [0,1] sesuai colorscale
-    grid_norm = np.clip((grid - R_MIN_DATA) / (R_MAX_DATA - R_MIN_DATA), 0, 1)
-
-    return xi, yi, zi, grid, grid_norm, df, geom, line_y
-
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
-st.sidebar.header("📂 Upload Data")
-uploaded = st.sidebar.file_uploader("Upload file Excel (.xlsx)", type=['xlsx'])
-
-if uploaded:
-    file_bytes = uploaded.read()
-else:
-    try:
-        with open('Geolistrik_3D.xlsx', 'rb') as f:
-            file_bytes = f.read()
-        st.sidebar.success("✅ Data bawaan: Geolistrik_3D.xlsx")
-    except:
-        st.warning("⚠️ Silakan upload file Excel data geolistrik Anda.")
-        st.stop()
-
-st.sidebar.header("⚙️ Resolusi Grid")
-nx = st.sidebar.slider("Grid X", 30, 120, 60, 10)
-ny = st.sidebar.slider("Grid Y", 10, 50,  30,  5)
-nz = st.sidebar.slider("Grid Z", 10, 40,  20,  5)
-
-xi, yi, zi, grid, grid_norm, df, geom, line_y = load_and_build(file_bytes, nx, ny, nz)
-
-# Konversi zi ke kedalaman positif (untuk label)
-zi_depth = np.abs(zi)  # misal: -0.25 → 0.25 m
-
-# ─── Helper: buat surface ─────────────────────────────────────────────────────
-def make_surf(x2d, y2d, z2d, color_norm, name, show_cb=False):
-    return go.Surface(
-        x=x2d, y=y2d, z=z2d,
-        surfacecolor=color_norm,
-        colorscale=COLORSCALE_RES2DINV,
-        cmin=0, cmax=1,
-        showscale=show_cb,
-        colorbar=CBAR_CFG if show_cb else None,
-        name=name,
-        hovertemplate=(
-            'X: %{x:.1f} m<br>'
-            'Y: %{y:.1f} m<br>'
-            'Z: %{z:.2f} m<extra>' + name + '</extra>'
-        ),
-    )
-
-# ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🧊 Model 3D Box",
-    "🏗️ Fence Diagram",
-    "📐 Irisan Horizontal",
-    "📏 Irisan Vertikal",
-    "📊 Data & Interpretasi",
-])
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — MODEL 3D BOX
-# ══════════════════════════════════════════════════════════════════════════════
-with tab1:
-    st.subheader("Model 3D Resistivitas — Box View (Surfer Style)")
-
-    col_opt1, col_opt2, col_opt3 = st.columns(3)
-    with col_opt1:
-        show_front = st.checkbox("✅ Sisi Depan (Y min)", value=True)
-        show_top   = st.checkbox("✅ Sisi Atas (permukaan)", value=True)
-    with col_opt2:
-        show_left  = st.checkbox("✅ Sisi Kiri (X min)", value=True)
-        show_back  = st.checkbox("Sisi Belakang (Y max)", value=False)
-    with col_opt3:
-        show_right = st.checkbox("Sisi Kanan (X max)", value=False)
-        show_bot   = st.checkbox("Sisi Bawah (terdalam)", value=False)
-
-    fig = go.Figure()
-    cb_done = False
-
-    # Sisi Depan — Y=min
-    if show_front:
-        XF, ZF = np.meshgrid(xi, zi, indexing='ij')
-        YF = np.full_like(XF, yi[0])
-        fig.add_trace(make_surf(XF, YF, ZF, grid_norm[:,0,:], 'Depan', not cb_done))
-        cb_done = True
-
-    # Sisi Belakang — Y=max
-    if show_back:
-        XB, ZB = np.meshgrid(xi, zi, indexing='ij')
-        YB = np.full_like(XB, yi[-1])
-        fig.add_trace(make_surf(XB, YB, ZB, grid_norm[:,-1,:], 'Belakang', not cb_done))
-        cb_done = True
-
-    # Sisi Atas — Z=max (permukaan tanah)
-    if show_top:
-        XT, YT = np.meshgrid(xi, yi, indexing='ij')
-        ZT = np.full_like(XT, zi[-1])
-        fig.add_trace(make_surf(XT, YT, ZT, grid_norm[:,:,-1], 'Atas', not cb_done))
-        cb_done = True
-
-    # Sisi Bawah — Z=min
-    if show_bot:
-        XBo, YBo = np.meshgrid(xi, yi, indexing='ij')
-        ZBo = np.full_like(XBo, zi[0])
-        fig.add_trace(make_surf(XBo, YBo, ZBo, grid_norm[:,:,0], 'Bawah', not cb_done))
-        cb_done = True
-
-    # Sisi Kiri — X=min
-    if show_left:
-        YL, ZL = np.meshgrid(yi, zi, indexing='ij')
-        XL = np.full_like(YL, xi[0])
-        fig.add_trace(make_surf(XL, YL, ZL, grid_norm[0,:,:], 'Kiri', not cb_done))
-        cb_done = True
-
-    # Sisi Kanan — X=max
-    if show_right:
-        YR, ZR = np.meshgrid(yi, zi, indexing='ij')
-        XR = np.full_like(YR, xi[-1])
-        fig.add_trace(make_surf(XR, YR, ZR, grid_norm[-1,:,:], 'Kanan', not cb_done))
-        cb_done = True
-
-    # Label & garis lintasan
-    for _, row in geom.iterrows():
-        y_pos = float(row['Y_Position'])
-        fig.add_trace(go.Scatter3d(
-            x=[(xi[0]+xi[-1])/2],
-            y=[y_pos],
-            z=[zi[-1] + abs(zi[-1]-zi[0])*0.18],
-            mode='text+markers',
-            text=[f"<b>{row['Line']}<br>Y={int(y_pos)} m</b>"],
-            textfont=dict(size=11, color='black'),
-            marker=dict(size=3, color='black'),
-            showlegend=False,
-        ))
-        fig.add_trace(go.Scatter3d(
-            x=[xi[0], xi[-1]], y=[y_pos, y_pos], z=[zi[-1], zi[-1]],
-            mode='lines',
-            line=dict(color='black', width=2, dash='dash'),
-            showlegend=False,
-        ))
-
+# ─────────────────────────────────────────────
+# PLOTS
+# ─────────────────────────────────────────────
+def plot_3d_volume(xi, yi, zi, grid, vmin, vmax, title_suffix=""):
+    fig = go.Figure(data=go.Volume(
+        x=np.repeat(xi, len(yi) * len(zi)),
+        y=np.tile(np.repeat(yi, len(zi)), len(xi)),
+        z=np.tile(zi, len(xi) * len(yi)),
+        value=grid.flatten(),
+        isomin=vmin,
+        isomax=vmax,
+        opacity=0.15,
+        surface_count=20,
+        colorscale="RdYlGn_r",
+        colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f"),
+        cmin=vmin,
+        cmax=vmax,
+    ))
     fig.update_layout(
+        title=f"Model 3D Resistivitas{title_suffix}",
         scene=dict(
-            xaxis=dict(title='X (m)', backgroundcolor='rgb(245,245,245)', showbackground=True),
-            yaxis=dict(title='Y (m)', backgroundcolor='rgb(235,235,245)', showbackground=True),
-            zaxis=dict(title='Kedalaman (m)', backgroundcolor='rgb(235,245,245)', showbackground=True),
-            camera=dict(eye=dict(x=1.6, y=-1.8, z=1.1)),
-            aspectmode='manual',
-            aspectratio=dict(x=2.2, y=0.6, z=0.5),
+            xaxis_title="Jarak (m)",
+            yaxis_title="Lintasan (m)",
+            zaxis_title="Kedalaman (m)",
         ),
-        height=640,
-        title=dict(text="MODEL 3D RESISTIVITAS", x=0.5, font=dict(size=16, color='black')),
-        margin=dict(l=0, r=20, t=50, b=0),
-        paper_bgcolor='white',
+        height=650,
+        margin=dict(l=0, r=0, t=40, b=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    return fig
 
-    # Informasi skala
-    st.info(
-        "📌 **Skala warna identik dengan Res2DInv:** "
-        "🔵 Biru tua < 1 Ω·m → 🔵 Biru 7 → 🩵 Cyan 13 → 🟢 Hijau 19–25 → "
-        "🟡 Kuning 31 → 🟠 Oranye 37 → 🔴 Merah 43+ Ω·m"
-    )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — FENCE DIAGRAM
-# ══════════════════════════════════════════════════════════════════════════════
-with tab2:
-    st.subheader("Fence Diagram — Penampang Vertikal 3 Lintasan")
-
-    fig_f = go.Figure()
-    cb_f  = False
-
-    for _, row in geom.iterrows():
-        y_pos = float(row['Y_Position'])
-        iy    = np.argmin(np.abs(yi - y_pos))
-        face  = grid_norm[:, iy, :]   # NX x NZ
-
-        XF2, ZF2 = np.meshgrid(xi, zi, indexing='ij')
-        YF2 = np.full_like(XF2, y_pos)
-
-        fig_f.add_trace(make_surf(XF2, YF2, ZF2, face, f"{row['Line']} Y={int(y_pos)}m", not cb_f))
-        cb_f = True
-
-        fig_f.add_trace(go.Scatter3d(
-            x=[(xi[0]+xi[-1])/2], y=[y_pos],
-            z=[zi[-1] + abs(zi[-1]-zi[0])*0.2],
-            mode='text',
-            text=[f"<b>{row['Line']}<br>Y={int(y_pos)} m</b>"],
-            textfont=dict(size=11, color='black'),
-            showlegend=False,
+def plot_fence_diagram(df, line_y, vmin, vmax):
+    fig = go.Figure()
+    colorscale = "RdYlGn_r"
+    for line_name, y_pos in sorted(line_y.items(), key=lambda x: x[1]):
+        sub = df[df["LINE"] == str(line_name)]
+        if sub.empty:
+            continue
+        xi_l = np.linspace(sub["X"].min(), sub["X"].max(), 80)
+        zi_l = np.linspace(sub["Z"].min(), sub["Z"].max(), 40)
+        XI, ZI = np.meshgrid(xi_l, zi_l)
+        pts2d = sub[["X", "Z"]].values
+        vals2d = sub["RHO"].values
+        grid2d = griddata(pts2d, vals2d, (XI, ZI), method="linear")
+        nan_m = np.isnan(grid2d)
+        if nan_m.any():
+            g2 = griddata(pts2d, vals2d, (XI, ZI), method="nearest")
+            grid2d[nan_m] = g2[nan_m]
+        YI = np.full_like(XI, float(y_pos))
+        fig.add_trace(go.Surface(
+            x=XI, y=YI, z=ZI,
+            surfacecolor=grid2d,
+            colorscale=colorscale,
+            cmin=vmin, cmax=vmax,
+            showscale=True,
+            colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f", x=1.02),
+            name=f"Lintasan {line_name}",
+            opacity=0.9,
         ))
-
-    fig_f.update_layout(
+    fig.update_layout(
+        title="Fence Diagram – Penampang Vertikal Antar Lintasan",
         scene=dict(
-            xaxis=dict(title='X (m)'),
-            yaxis=dict(title='Y (m)'),
-            zaxis=dict(title='Kedalaman (m)'),
-            camera=dict(eye=dict(x=1.8, y=-1.6, z=1.0)),
-            aspectmode='manual',
-            aspectratio=dict(x=2.2, y=0.6, z=0.5),
+            xaxis_title="Jarak (m)",
+            yaxis_title="Lintasan (m)",
+            zaxis_title="Kedalaman (m)",
         ),
-        height=600,
-        title=dict(text="FENCE DIAGRAM (PENAMPANG 3D)", x=0.5, font=dict(size=16)),
-        margin=dict(l=0, r=20, t=50, b=0),
-        paper_bgcolor='white',
+        height=650,
+        margin=dict(l=0, r=0, t=40, b=0),
     )
-    st.plotly_chart(fig_f, use_container_width=True)
+    return fig
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — IRISAN HORIZONTAL
-# ══════════════════════════════════════════════════════════════════════════════
-with tab3:
-    st.subheader("Irisan Horizontal (pada Kedalaman Tertentu)")
 
-    depth_labels = [f"{abs(z):.2f} m" for z in zi]
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        d1 = st.selectbox("Kedalaman 1", range(len(zi)), format_func=lambda i: depth_labels[i], index=0)
-    with col2:
-        d2 = st.selectbox("Kedalaman 2", range(len(zi)), format_func=lambda i: depth_labels[i], index=len(zi)//2)
-    with col3:
-        d3 = st.selectbox("Kedalaman 3", range(len(zi)), format_func=lambda i: depth_labels[i], index=len(zi)-1)
-
-    titles_h = [f"Kedalaman {depth_labels[i]}" for i in [d1,d2,d3]]
-    fig_h = make_subplots(rows=1, cols=3, subplot_titles=titles_h, horizontal_spacing=0.08)
-
-    # Buat colorscale untuk contour (pakai nilai asli Ω·m)
-    for col_i, iz_idx in enumerate([d1, d2, d3], 1):
-        slice_r = grid[:, :, iz_idx]   # NX x NY, nilai resistivitas asli
-
-        fig_h.add_trace(go.Contour(
-            x=xi, y=yi, z=slice_r.T,
-            colorscale=[[norm(v), c] for v, c in [
-                (0.49,'#00004B'),(1,'#0000FF'),(7,'#0080FF'),
-                (13,'#00FFFF'),(19,'#00C800'),(25,'#80FF00'),
-                (31,'#FFFF00'),(37,'#FFA000'),(43,'#FF0000'),
-                (52,'#800000'),(60.94,'#500050')
-            ]],
-            zmin=R_MIN_DATA, zmax=R_MAX_DATA,
-            showscale=(col_i == 3),
-            colorbar=dict(
-                title="Resistivity (Ω·m)",
-                tickvals=[1,7,13,19,25,31,37,43],
-                ticktext=['1','7','13','19','25','31','37','43'],
-                thickness=15,
-            ) if col_i == 3 else None,
-            contours=dict(
-                coloring='heatmap',
-                showlabels=True,
-                labelfont=dict(size=8, color='white'),
-                start=1, end=43, size=6,
-            ),
-            hovertemplate='X:%{x:.1f} m<br>Y:%{y:.1f} m<br>R:%{z:.2f} Ω·m<extra></extra>',
-        ), row=1, col=col_i)
-
-        # Garis lintasan
-        for _, grow in geom.iterrows():
-            fig_h.add_trace(go.Scatter(
-                x=[xi[0], xi[-1]],
-                y=[grow['Y_Position'], grow['Y_Position']],
-                mode='lines+text',
-                line=dict(color='white', width=1.5, dash='dot'),
-                text=[grow['Line'], ''],
-                textposition='top left',
-                textfont=dict(size=9, color='white'),
-                showlegend=False,
-            ), row=1, col=col_i)
-
-    fig_h.update_xaxes(title_text="X (m)")
-    fig_h.update_yaxes(title_text="Y (m)")
-    fig_h.update_layout(
-        height=400,
-        title=dict(text="IRISAN HORIZONTAL (KEDALAMAN TERTENTU)", x=0.5, font=dict(size=15)),
-        paper_bgcolor='white',
+def plot_horizontal_slice(xi, yi, zi, grid, depth_idx, depth_val, vmin, vmax):
+    slice_data = grid[:, :, depth_idx]
+    fig = go.Figure(data=go.Heatmap(
+        x=xi, y=yi,
+        z=slice_data.T,
+        colorscale="RdYlGn_r",
+        zmin=vmin, zmax=vmax,
+        colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f"),
+    ))
+    fig.update_layout(
+        title=f"Irisan Horizontal – Kedalaman {depth_val:.2f} m",
+        xaxis_title="Jarak (m)",
+        yaxis_title="Lintasan (m)",
+        height=500,
     )
-    st.plotly_chart(fig_h, use_container_width=True)
+    return fig
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — IRISAN VERTIKAL
-# ══════════════════════════════════════════════════════════════════════════════
-with tab4:
-    st.subheader("Irisan Vertikal — Penampang Memanjang per Lintasan")
 
-    lines_all = geom['Line'].tolist()
-    col_a, col_b = st.columns([1, 3])
-    with col_a:
-        mode_v = st.radio("Tampilkan", ["Semua Lintasan", "Pilih Lintasan"])
-        sel_line = st.selectbox("Pilih", lines_all) if mode_v == "Pilih Lintasan" else None
-
-    lines_show = lines_all if mode_v == "Semua Lintasan" else [sel_line]
-    titles_v   = [f"{l} — Y={int(line_y[l])} m" for l in lines_show]
-
-    fig_v = make_subplots(rows=1, cols=len(lines_show), subplot_titles=titles_v,
-                          horizontal_spacing=0.06)
-
-    contour_colorscale = [[norm(v), c] for v, c in [
-        (0.49,'#00004B'),(1,'#0000FF'),(7,'#0080FF'),
-        (13,'#00FFFF'),(19,'#00C800'),(25,'#80FF00'),
-        (31,'#FFFF00'),(37,'#FFA000'),(43,'#FF0000'),
-        (52,'#800000'),(60.94,'#500050')
-    ]]
-
-    for col_i, lname in enumerate(lines_show, 1):
-        iy      = np.argmin(np.abs(yi - line_y[lname]))
-        slice_v = grid[:, iy, :]   # NX x NZ, nilai asli
-
-        fig_v.add_trace(go.Contour(
-            x=xi, y=zi, z=slice_v.T,
-            colorscale=contour_colorscale,
-            zmin=R_MIN_DATA, zmax=R_MAX_DATA,
-            showscale=(col_i == len(lines_show)),
-            colorbar=dict(
-                title="Resistivity (Ω·m)",
-                tickvals=[1,7,13,19,25,31,37,43],
-                ticktext=['1','7','13','19','25','31','37','43'],
-                thickness=15,
-            ) if col_i == len(lines_show) else None,
-            contours=dict(
-                coloring='heatmap',
-                showlabels=True,
-                labelfont=dict(size=9, color='white'),
-                start=1, end=43, size=6,
-            ),
-            hovertemplate='X:%{x:.1f} m<br>Z:%{y:.2f} m<br>R:%{z:.2f} Ω·m<extra></extra>',
-        ), row=1, col=col_i)
-
-    fig_v.update_xaxes(title_text="X (m)")
-    fig_v.update_yaxes(title_text="Kedalaman (m)")
-    fig_v.update_layout(
-        height=400,
-        title=dict(text="IRISAN VERTIKAL (PENAMPANG MEMANJANG)", x=0.5, font=dict(size=15)),
-        paper_bgcolor='white',
+def plot_vertical_slice(xi, zi, grid, line_idx, line_val, vmin, vmax):
+    slice_data = grid[:, line_idx, :]
+    fig = go.Figure(data=go.Heatmap(
+        x=xi, y=zi,
+        z=slice_data.T,
+        colorscale="RdYlGn_r",
+        zmin=vmin, zmax=vmax,
+        colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f"),
+    ))
+    fig.update_layout(
+        title=f"Irisan Vertikal – Lintasan Y = {line_val:.1f} m",
+        xaxis_title="Jarak (m)",
+        yaxis_title="Kedalaman (m)",
+        height=500,
     )
-    st.plotly_chart(fig_v, use_container_width=True)
+    return fig
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — DATA & INTERPRETASI
-# ══════════════════════════════════════════════════════════════════════════════
-with tab5:
-    st.subheader("Data & Interpretasi Litologi Gambut")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Data Poin", len(df))
-    c2.metric("Rentang Resistivitas", f"{df['Resistivity'].min():.2f} – {df['Resistivity'].max():.2f} Ω·m")
-    c3.metric("Rentang Kedalaman", f"{abs(df['Depth'].max()):.2f} – {abs(df['Depth'].min()):.2f} m")
+# ─────────────────────────────────────────────
+# LITHOLOGY LEGEND TABLE
+# ─────────────────────────────────────────────
+def build_lithology_legend(active_lithologies, vmin, vmax):
+    rows = []
+    for name in active_lithologies:
+        if name not in TELFORD_TABLE:
+            continue
+        rmin, rmax, label, desc = TELFORD_TABLE[name]
+        # check overlap with data range
+        if rmax < vmin or rmin > vmax:
+            overlap = "–"
+        else:
+            lo = max(rmin, vmin)
+            hi = min(rmax, vmax)
+            overlap = f"{lo:.1f} – {hi:.1f}"
+        rows.append({
+            "Litologi": label,
+            "Rentang Telford (Ω·m)": f"{rmin} – {rmax}",
+            "Terdapat di Data": overlap,
+            "Keterangan": desc,
+        })
+    return pd.DataFrame(rows)
 
-    st.markdown("---")
-    st.markdown("### 🗺️ Legenda Interpretasi Litologi (Sesuai Skala Res2DInv)")
 
-    interp = [
-        ('#00004B', '< 1 Ω·m',     'Lempung sangat jenuh / air'),
-        ('#0000FF', '1 – 7 Ω·m',   'Gambut jenuh (zona utama)'),
-        ('#00FFFF', '7 – 13 Ω·m',  'Gambut agak jenuh'),
-        ('#00C800', '13 – 19 Ω·m', 'Gambut kurang jenuh'),
-        ('#FFFF00', '25 – 31 Ω·m', 'Batas gambut/mineral'),
-        ('#FF0000', '> 43 Ω·m',    'Lapisan mineral / lempung padat'),
-    ]
-    cols_leg = st.columns(len(interp))
-    for ci, (color, rng, desc) in zip(cols_leg, interp):
-        text_color = 'black' if color in ['#FFFF00', '#80FF00'] else 'white'
-        ci.markdown(
-            f'<div style="background:{color};padding:10px 6px;border-radius:8px;'
-            f'text-align:center;margin-bottom:4px;">'
-            f'<span style="color:{text_color};font-weight:bold;font-size:11px;">'
-            f'{rng}<br><small>{desc}</small></span></div>',
-            unsafe_allow_html=True
+# ─────────────────────────────────────────────
+# STATISTICS & INTERPRETATION TABLE
+# ─────────────────────────────────────────────
+def build_stats_table(df, active_lithologies):
+    bins = []
+    for name in active_lithologies:
+        if name not in TELFORD_TABLE:
+            continue
+        rmin, rmax, label, _ = TELFORD_TABLE[name]
+        mask = (df["RHO"] >= rmin) & (df["RHO"] <= rmax)
+        cnt = mask.sum()
+        if cnt > 0:
+            bins.append({
+                "Litologi": label,
+                "Rentang (Ω·m)": f"{rmin} – {rmax}",
+                "Jumlah Titik": cnt,
+                "% Data": f"{100*cnt/len(df):.1f}%",
+                "Rata-rata (Ω·m)": f"{df.loc[mask,'RHO'].mean():.2f}",
+                "Min (Ω·m)": f"{df.loc[mask,'RHO'].min():.2f}",
+                "Max (Ω·m)": f"{df.loc[mask,'RHO'].max():.2f}",
+            })
+    return pd.DataFrame(bins).sort_values("Jumlah Titik", ascending=False) if bins else pd.DataFrame()
+
+
+# ─────────────────────────────────────────────
+# MAIN APP
+# ─────────────────────────────────────────────
+def main():
+    # ── Header ──
+    st.title("🌍 Model 3D Resistivitas Geolistrik")
+    st.markdown(
+        "Visualisasi data geolistrik 2D multi-lintasan menjadi model 3D resistivitas "
+        "dengan interpretasi litologi berdasarkan **Tabel Telford et al. (1990)** "
+        "dan kondisi **geologi regional** lokasi kajian."
+    )
+
+    # ── Sidebar ──
+    with st.sidebar:
+        st.header("⚙️ Pengaturan")
+
+        # 1) Upload
+        st.subheader("📂 Upload Data Excel")
+        uploaded = st.file_uploader("File .xlsx (sheet: GEOMETRY & DATA)", type=["xlsx"])
+
+        st.markdown("---")
+
+        # 2) Geologi Regional
+        st.subheader("🗺️ Kondisi Geologi Regional")
+        env_choice = st.selectbox(
+            "Pilih Lingkungan Geologi",
+            list(GEOLOGICAL_ENVIRONMENTS.keys()),
+            index=0,
+            help="Pilih lingkungan geologi yang sesuai dengan lokasi kajian Anda. "
+                 "Ini akan menyaring jenis litologi yang relevan dari tabel Telford.",
+        )
+        env_info = GEOLOGICAL_ENVIRONMENTS[env_choice]
+        st.info(f"📋 {env_info['description']}")
+
+        # Custom notes
+        custom_notes = st.text_area(
+            "Catatan Geologi Tambahan (opsional)",
+            placeholder="Contoh: Terdapat singkapan batugamping di utara lokasi, kedalaman muka air tanah ~2 m...",
+            height=80,
         )
 
-    st.markdown("---")
-    st.markdown("### 📋 Statistik Per Lintasan")
-    stats = df.groupby('Line')['Resistivity'].agg(['min','max','mean','median']).round(3)
-    stats.columns = ['Min (Ω·m)', 'Max (Ω·m)', 'Mean (Ω·m)', 'Median (Ω·m)']
-    st.dataframe(stats, use_container_width=True)
+        # Show active lithologies
+        with st.expander("🪨 Litologi Aktif untuk Lingkungan Ini"):
+            for lith in env_info["lithologies"]:
+                if lith in TELFORD_TABLE:
+                    rmin, rmax, label, desc = TELFORD_TABLE[lith]
+                    st.markdown(f"- **{label}**: {rmin}–{rmax} Ω·m *(_{desc}_)*")
 
-    st.markdown("### 📋 Statistik Per Kedalaman")
-    stats_z = df.groupby('Depth')['Resistivity'].agg(['min','max','mean']).round(3)
-    stats_z.index = [f"{abs(z):.2f} m" for z in stats_z.index]
-    stats_z.columns = ['Min (Ω·m)', 'Max (Ω·m)', 'Mean (Ω·m)']
-    st.dataframe(stats_z, use_container_width=True)
+        st.markdown("---")
 
-    st.markdown("---")
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='DATA', index=False)
-        geom.to_excel(writer, sheet_name='GEOMETRY', index=False)
-        stats.to_excel(writer, sheet_name='STATISTIK_LINTASAN')
-        stats_z.to_excel(writer, sheet_name='STATISTIK_KEDALAMAN')
-    st.download_button(
-        "⬇️ Download Data Lengkap (.xlsx)",
-        data=buf.getvalue(),
-        file_name="Geolistrik_3D_Hasil.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        # 3) Grid resolution
+        st.subheader("🔧 Resolusi Grid")
+        nx = st.slider("Grid X", 20, 100, 60, 10)
+        ny = st.slider("Grid Y", 10, 60, 30, 5)
+        nz = st.slider("Grid Z", 10, 50, 25, 5)
 
-st.markdown("---")
-st.caption(
-    "📌 Skala warna & tick identik dengan Res2DInv | "
-    "Interpolasi: Scipy griddata (linear + nearest fill) | "
-    "Nilai legend: Apparent Resistivity (Ω·m) asli"
-)
+        st.markdown("---")
+        st.markdown("📖 *Referensi: Telford, W.M., Geldart, L.P., Sheriff, R.E. (1990). Applied Geophysics. Cambridge University Press.*")
+
+    # ── Main content ──
+    if uploaded is None:
+        st.info("👆 Upload file Excel untuk memulai. Format: sheet **GEOMETRY** dan **DATA**.")
+        # Show format guide
+        with st.expander("📋 Panduan Format Data Excel"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Sheet: GEOMETRY**")
+                st.dataframe(pd.DataFrame({"Line": ["L1","L2","L3"], "Y_Position": [0, 10, 20]}))
+            with c2:
+                st.markdown("**Sheet: DATA**")
+                st.dataframe(pd.DataFrame({
+                    "Line":        ["L1","L1","L2"],
+                    "Distance":    [1.5, 2.5, 1.5],
+                    "Position":    [0,   0,   0],
+                    "Depth":       [-0.25, -0.5, -0.25],
+                    "Resistivity": [1.29,  2.44, 15.3],
+                }))
+
+        # Show Telford table reference
+        with st.expander("📊 Tabel Resistivitas Telford (Referensi Lengkap)"):
+            rows = []
+            for name, (rmin, rmax, label, desc) in TELFORD_TABLE.items():
+                rows.append({"Litologi": label, "Min (Ω·m)": rmin, "Max (Ω·m)": rmax, "Keterangan": desc})
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        return
+
+    # ── Load & process ──
+    with st.spinner("Membaca dan memproses data..."):
+        try:
+            df, line_y = load_data(uploaded)
+        except Exception as e:
+            st.error(f"Gagal membaca file: {e}")
+            return
+
+    if df.empty:
+        st.error("Data kosong atau format kolom tidak dikenali.")
+        return
+
+    active_lithologies = env_info["lithologies"]
+    vmin = float(df["RHO"].quantile(0.02))
+    vmax = float(df["RHO"].quantile(0.98))
+
+    # ── Data Summary ──
+    st.success(f"✅ Data berhasil dimuat: **{len(df):,}** titik pengukuran dari **{df['LINE'].nunique()}** lintasan")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total Titik", f"{len(df):,}")
+    col2.metric("Jumlah Lintasan", df["LINE"].nunique())
+    col3.metric("Min Resistivitas", f"{df['RHO'].min():.2f} Ω·m")
+    col4.metric("Max Resistivitas", f"{df['RHO'].max():.2f} Ω·m")
+    col5.metric("Rata-rata", f"{df['RHO'].mean():.2f} Ω·m")
+
+    if custom_notes:
+        st.info(f"📝 **Catatan Geologi:** {custom_notes}")
+
+    # ── Build Grid ──
+    with st.spinner("Membangun grid 3D..."):
+        xi, yi, zi, grid = build_grid(df, nx=nx, ny=ny, nz=nz)
+
+    # ── Tabs ──
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🧊 Model 3D Volume",
+        "🏗️ Fence Diagram",
+        "📐 Irisan Horizontal",
+        "📏 Irisan Vertikal",
+        "📊 Interpretasi Litologi",
+    ])
+
+    # ── Tab 1: 3D Volume ──
+    with tab1:
+        st.subheader("Model 3D Resistivitas")
+        fig3d = plot_3d_volume(xi, yi, zi, grid, vmin, vmax,
+                               title_suffix=f" – {env_choice}")
+        st.plotly_chart(fig3d, use_container_width=True)
+        st.caption(
+            "Model volume 3D hasil interpolasi griddata (scipy). "
+            "Warna merah = resistivitas rendah (konduktif), hijau = tinggi (resistif). "
+            "Nilai ditampilkan dalam Ω·m (apparent resistivity)."
+        )
+
+    # ── Tab 2: Fence Diagram ──
+    with tab2:
+        st.subheader("Fence Diagram")
+        fig_fence = plot_fence_diagram(df, line_y, vmin, vmax)
+        st.plotly_chart(fig_fence, use_container_width=True)
+        st.caption(
+            "Penampang vertikal setiap lintasan ditampilkan dalam ruang 3D. "
+            "Nilai resistivitas dalam Ω·m."
+        )
+
+    # ── Tab 3: Horizontal Slice ──
+    with tab3:
+        st.subheader("Irisan Horizontal")
+        depth_idx = st.slider("Pilih Kedalaman", 0, len(zi)-1, len(zi)//2,
+                              format_func=lambda i: f"{zi[i]:.2f} m")
+        fig_hz = plot_horizontal_slice(xi, yi, zi, grid, depth_idx, zi[depth_idx], vmin, vmax)
+        st.plotly_chart(fig_hz, use_container_width=True)
+
+        # Dominant lithology at this depth
+        slice_vals = grid[:, :, depth_idx].flatten()
+        slice_vals = slice_vals[~np.isnan(slice_vals)]
+        if len(slice_vals) > 0:
+            median_val = float(np.median(slice_vals))
+            primary = get_primary_lithology(median_val, active_lithologies)
+            st.info(
+                f"🔍 Kedalaman **{zi[depth_idx]:.2f} m** | "
+                f"Median resistivitas: **{median_val:.2f} Ω·m** | "
+                f"Interpretasi dominan: **{primary}**"
+            )
+
+    # ── Tab 4: Vertical Slice ──
+    with tab4:
+        st.subheader("Irisan Vertikal per Lintasan")
+        line_idx = st.slider("Pilih Lintasan (Y)", 0, len(yi)-1, len(yi)//2,
+                             format_func=lambda i: f"Y = {yi[i]:.1f} m")
+        fig_vt = plot_vertical_slice(xi, zi, grid, line_idx, yi[line_idx], vmin, vmax)
+        st.plotly_chart(fig_vt, use_container_width=True)
+
+    # ── Tab 5: Interpretasi Litologi ──
+    with tab5:
+        st.subheader(f"Interpretasi Litologi – {env_choice}")
+        st.markdown(
+            f"Interpretasi berdasarkan **Tabel Telford et al. (1990)** "
+            f"dengan filter lingkungan geologi: **{env_choice}**."
+        )
+
+        # Lithology legend
+        st.markdown("#### 📋 Tabel Referensi Litologi Aktif")
+        legend_df = build_lithology_legend(active_lithologies, vmin, vmax)
+        if not legend_df.empty:
+            st.dataframe(legend_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        # Statistics
+        st.markdown("#### 📊 Distribusi Litologi dalam Data")
+        stats_df = build_stats_table(df, active_lithologies)
+        if not stats_df.empty:
+            st.dataframe(stats_df, use_container_width=True, hide_index=True)
+
+            # Bar chart distribusi
+            fig_bar = go.Figure(go.Bar(
+                x=stats_df["Litologi"],
+                y=[float(v.replace("%","")) for v in stats_df["% Data"]],
+                marker_color="steelblue",
+                text=stats_df["% Data"],
+                textposition="outside",
+            ))
+            fig_bar.update_layout(
+                title="Distribusi Litologi (% titik data)",
+                xaxis_title="Litologi",
+                yaxis_title="% Data",
+                height=400,
+                margin=dict(l=0, r=0, t=40, b=120),
+                xaxis_tickangle=-35,
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.warning("Tidak ada litologi yang cocok dengan rentang data dalam lingkungan geologi ini.")
+
+        st.markdown("---")
+
+        # Point-wise interpretation
+        st.markdown("#### 🔎 Interpretasi Titik Data")
+        n_sample = min(200, len(df))
+        sample_df = df.sample(n_sample, random_state=42).copy()
+        sample_df["Litologi Utama"] = sample_df["RHO"].apply(
+            lambda r: get_primary_lithology(r, active_lithologies)
+        )
+        display_cols = ["LINE", "X", "Y", "Z", "RHO", "Litologi Utama"]
+        available_cols = [c for c in display_cols if c in sample_df.columns]
+        rename_map = {"LINE": "Lintasan", "X": "Jarak (m)", "Y": "Y (m)",
+                      "Z": "Kedalaman (m)", "RHO": "Resistivitas (Ω·m)"}
+        st.dataframe(
+            sample_df[available_cols].rename(columns=rename_map).reset_index(drop=True),
+            use_container_width=True, hide_index=True,
+        )
+        st.caption(f"Menampilkan sampel {n_sample} titik dari total {len(df):,} titik.")
+
+        st.markdown("---")
+        st.markdown(
+            "📖 **Referensi:** Telford, W.M., Geldart, L.P., & Sheriff, R.E. (1990). "
+            "*Applied Geophysics* (2nd ed.). Cambridge University Press."
+        )
+
+
+if __name__ == "__main__":
+    main()
