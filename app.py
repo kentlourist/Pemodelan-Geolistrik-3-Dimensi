@@ -182,7 +182,7 @@ def inject_css():
         margin-left: 8px;
     }
 
-    /* ── INFO BANNER ── */
+    /* ── INFO BANNER (main area) ── */
     .geo-banner {
         background: linear-gradient(135deg, #e8eaf6, #e3f2fd);
         border-left: 4px solid #3f51b5;
@@ -190,8 +190,17 @@ def inject_css():
         padding: 1rem 1.2rem;
         margin: 1rem 0;
         font-size: 0.9rem;
-        color: #283593;
+        color: #1a237e !important;
         animation: fadeIn 0.4s ease-out;
+    }
+    /* ── INFO BANNER inside sidebar override ── */
+    [data-testid="stSidebar"] .geo-banner {
+        background: rgba(255,255,255,0.12) !important;
+        border-left: 4px solid rgba(255,255,255,0.5) !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stSidebar"] .geo-banner * {
+        color: #ffffff !important;
     }
     .note-banner {
         background: linear-gradient(135deg, #fff8e1, #fff3e0);
@@ -235,47 +244,97 @@ def inject_css():
         background: linear-gradient(180deg, #1a237e 0%, #283593 40%, #1565c0 100%) !important;
         border-right: none !important;
     }
-    [data-testid="stSidebar"] * {
-        color: rgba(255,255,255,0.92) !important;
+    /* Force ALL text in sidebar to white */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] *,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] small,
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] .stMarkdown p,
+    [data-testid="stSidebar"] .stMarkdown span {
+        color: #ffffff !important;
     }
-    [data-testid="stSidebar"] .stMarkdown h1,
-    [data-testid="stSidebar"] .stMarkdown h2,
-    [data-testid="stSidebar"] .stMarkdown h3 {
-        color: white !important;
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] h4 {
+        color: #ffffff !important;
     }
     [data-testid="stSidebar"] hr {
-        border-color: rgba(255,255,255,0.15) !important;
+        border-color: rgba(255,255,255,0.2) !important;
     }
-    [data-testid="stSidebar"] .stSelectbox label,
-    [data-testid="stSidebar"] .stSlider label,
-    [data-testid="stSidebar"] .stFileUploader label,
-    [data-testid="stSidebar"] .stTextArea label {
-        color: rgba(255,255,255,0.9) !important;
-        font-weight: 500 !important;
-    }
+    /* Selectbox */
     [data-testid="stSidebar"] [data-baseweb="select"] > div {
-        background: rgba(255,255,255,0.12) !important;
-        border-color: rgba(255,255,255,0.25) !important;
+        background: rgba(255,255,255,0.15) !important;
+        border: 1px solid rgba(255,255,255,0.35) !important;
         border-radius: 10px !important;
+    }
+    [data-testid="stSidebar"] [data-baseweb="select"] > div > div,
+    [data-testid="stSidebar"] [data-baseweb="select"] > div span {
+        color: #ffffff !important;
+    }
+    [data-testid="stSidebar"] [data-baseweb="select"] svg {
+        fill: white !important;
         color: white !important;
     }
-    [data-testid="stSidebar"] [data-baseweb="select"] svg { color: white !important; }
-    [data-testid="stSidebar"] .stTextArea textarea {
+    /* Select option value text */
+    [data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stSelectboxVirtualDropdown"] * {
+        color: #1a237e !important;
+    }
+    /* Textarea */
+    [data-testid="stSidebar"] textarea {
+        background: rgba(255,255,255,0.12) !important;
+        border: 1px solid rgba(255,255,255,0.3) !important;
+        border-radius: 10px !important;
+        color: #ffffff !important;
+        caret-color: white !important;
+    }
+    [data-testid="stSidebar"] textarea::placeholder {
+        color: rgba(255,255,255,0.5) !important;
+    }
+    /* File uploader */
+    [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+        background: rgba(255,255,255,0.1) !important;
+        border: 2px dashed rgba(255,255,255,0.4) !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] * {
+        color: #ffffff !important;
+    }
+    /* Slider */
+    [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] [role="slider"] {
+        background: white !important;
+        border-color: white !important;
+    }
+    [data-testid="stSidebar"] .stSlider [data-testid="stTickBar"] > div {
+        color: rgba(255,255,255,0.7) !important;
+    }
+    /* Info box / expander inside sidebar */
+    [data-testid="stSidebar"] .streamlit-expanderHeader {
         background: rgba(255,255,255,0.1) !important;
         border: 1px solid rgba(255,255,255,0.2) !important;
         border-radius: 10px !important;
-        color: white !important;
+        color: #ffffff !important;
     }
-    [data-testid="stSidebar"] .stTextArea textarea::placeholder {
-        color: rgba(255,255,255,0.5) !important;
+    [data-testid="stSidebar"] .streamlit-expanderHeader p,
+    [data-testid="stSidebar"] .streamlit-expanderHeader span {
+        color: #ffffff !important;
     }
-    [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
-        background: rgba(255,255,255,0.1) !important;
-        border: 2px dashed rgba(255,255,255,0.35) !important;
-        border-radius: 12px !important;
+    [data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+        background: rgba(255,255,255,0.06) !important;
+        border-radius: 0 0 10px 10px !important;
     }
-    [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] [role="slider"] {
-        background: white !important;
+    /* Uploaded file name chip */
+    [data-testid="stSidebar"] [data-testid="stFileUploaderFile"] {
+        background: rgba(255,255,255,0.15) !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(255,255,255,0.2) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stFileUploaderFile"] * {
+        color: #ffffff !important;
     }
     /* Sidebar section headers */
     .sidebar-section {
