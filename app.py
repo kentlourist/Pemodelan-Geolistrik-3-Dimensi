@@ -179,12 +179,34 @@ def get_primary_lithology(rho, active_lithologies):
     return results[0]["lithology"] if results else "Tidak teridentifikasi"
 
 
+# ─────────────────────────────────────────────
+# CUSTOM COLORSCALE – IDENTIK DENGAN RES2DINV
+# Urutan: biru tua -> biru -> cyan -> hijau -> kuning -> coklat -> oranye -> merah -> ungu
+# ─────────────────────────────────────────────
+RES2DINV_COLORSCALE = [
+    [0.000, "#00008B"],
+    [0.083, "#0000FF"],
+    [0.167, "#007FFF"],
+    [0.250, "#00BFFF"],
+    [0.333, "#00FFFF"],
+    [0.400, "#00C080"],
+    [0.450, "#00A000"],
+    [0.500, "#40C040"],
+    [0.560, "#80D040"],
+    [0.620, "#C8D400"],
+    [0.667, "#FFFF00"],
+    [0.720, "#D4A000"],
+    [0.780, "#C87820"],
+    [0.833, "#FF6400"],
+    [0.890, "#FF0000"],
+    [0.940, "#C00000"],
+    [1.000, "#800080"],
+]
+
+
 def build_color_scale_for_env(active_lithologies, vmin, vmax):
-    """
-    Buat colorscale Plotly berdasarkan rentang data aktual.
-    """
-    # Gunakan colorscale standar yang informatif untuk resistivitas
-    return "RdYlGn_r"  # merah=resistivitas rendah (konduktif), hijau=tinggi (resistif)
+    """Kembalikan colorscale Res2DInv."""
+    return RES2DINV_COLORSCALE
 
 
 # ─────────────────────────────────────────────
@@ -257,7 +279,7 @@ def plot_3d_volume(xi, yi, zi, grid, vmin, vmax, title_suffix=""):
         isomax=vmax,
         opacity=0.15,
         surface_count=20,
-        colorscale="RdYlGn_r",
+        colorscale=RES2DINV_COLORSCALE,
         colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f"),
         cmin=vmin,
         cmax=vmax,
@@ -277,7 +299,7 @@ def plot_3d_volume(xi, yi, zi, grid, vmin, vmax, title_suffix=""):
 
 def plot_fence_diagram(df, line_y, vmin, vmax):
     fig = go.Figure()
-    colorscale = "RdYlGn_r"
+    colorscale = RES2DINV_COLORSCALE
     for line_name, y_pos in sorted(line_y.items(), key=lambda x: x[1]):
         sub = df[df["LINE"] == str(line_name)]
         if sub.empty:
@@ -321,7 +343,7 @@ def plot_horizontal_slice(xi, yi, zi, grid, depth_idx, depth_val, vmin, vmax):
     fig = go.Figure(data=go.Heatmap(
         x=xi, y=yi,
         z=slice_data.T,
-        colorscale="RdYlGn_r",
+        colorscale=RES2DINV_COLORSCALE,
         zmin=vmin, zmax=vmax,
         colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f"),
     ))
@@ -339,7 +361,7 @@ def plot_vertical_slice(xi, zi, grid, line_idx, line_val, vmin, vmax):
     fig = go.Figure(data=go.Heatmap(
         x=xi, y=zi,
         z=slice_data.T,
-        colorscale="RdYlGn_r",
+        colorscale=RES2DINV_COLORSCALE,
         zmin=vmin, zmax=vmax,
         colorbar=dict(title="Resistivitas (Ω·m)", tickformat=".0f"),
     ))
